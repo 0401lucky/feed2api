@@ -7,6 +7,7 @@ import {
   extractPromptqlAgentText,
   normalizeContent,
   normalizeMessages,
+  parseModelIds,
 } from "../src/server.js";
 
 test("合并 OpenAI 消息为 PromptQL 单轮输入", () => {
@@ -111,4 +112,12 @@ test("派生 PromptQL v2 聊天 GraphQL 端点", () => {
     deriveChatGraphqlEndpoint("https://playground.promptql.pro.hasura.io/"),
     "https://playground.promptql.pro.hasura.io-v2-hge/v1/graphql",
   );
+});
+
+test("解析可配置模型列表", () => {
+  assert.deepEqual(
+    parseModelIds("promptql-roleplay, gpt-4o\nclaude-3-5-sonnet, gpt-4o"),
+    ["promptql-roleplay", "gpt-4o", "claude-3-5-sonnet"],
+  );
+  assert.deepEqual(parseModelIds(""), ["promptql-roleplay"]);
 });
