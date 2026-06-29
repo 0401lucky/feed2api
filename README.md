@@ -2,189 +2,102 @@
 
 给 SillyTavern 用的 PromptQL 聊天代理。
 
-它只做一件事：把 OpenAI 兼容的聊天请求转发到 PromptQL。
+它把 OpenAI 兼容的聊天请求转成 PromptQL Webhook 调用，再轮询线程事件取回助手回复。
 
 - `GET /health`：进程健康检查
 - `GET /ready`：检查 PromptQL 配置和上游连通性
 - `GET /v1/models`：OpenAI 兼容模型列表
 - `POST /v1/chat/completions`：OpenAI 兼容聊天接口
 
-不支持工具调用、函数调用、多模态上传。角色扮演场景够用。
+不支持工具调用、函数调用、多模态上传。角色扮演聊天够用。
 
 
-## 1. PromptQL 需要准备什么
+## 1. 已确认的 PromptQL 配置
 
-### 1.1 获取项目名
-
-你给的地址是：
-
-```text
-https://prompt.ql.app/project/p-8969d7e6-d5df/room/general/feed
-```
-
-其中项目名就是：
-
-```text
-p-8969d7e6-d5df
-```
-
-部署时填：
+这次已经用你的登录账号真实确认过：
 
 ```bash
 PROMPTQL_PROJECT_NAME=p-8969d7e6-d5df
+PROMPTQL_PROJECT_ID=8969d7e6-d5df-4046-9d23-7d0815eb7823
+PROMPTQL_ROOM_NAME=general
+PROMPTQL_ROOM_ID=bc6ffc31-1441-4adc-bac8-e375a5671be4
+PROMPTQL_WEBHOOK_BASE_URL=https://data.prompt.ql.app/promptql/playground-v2
+PROMPTQL_CHAT_GRAPHQL_ENDPOINT=https://data.prompt.ql.app/promptql/playground-v2-hge/v1/graphql
 ```
 
+注意：长期部署不能依赖网页登录态，所以本项目使用 PromptQL Webhook。
+Webhook 必须绑定房间，当前会把 SillyTavern 请求发到 `general` 房间。
 
-### 1.2 获取 PromptQL Token
+
+## 2. 获取 PromptQL Token
 
 不要复制浏览器 Cookie、localStorage 或网页登录态。
 
-推荐在 PromptQL 控制台创建专门的 token：
+使用 PromptQL 的 Personal Access Token：
 
-1. 登录 `https://prompt.ql.app`
-2. 进入你的项目
-3. 找到 `Settings` / `Admin` / `Tokens` / `User Tokens` 之类的入口
-4. 创建 `User Token` 或 `Bot Token`
-5. 名称建议填 `feed2api-zeabur`
-6. 权限如果有 scope 选择，优先选择能聊天和访问该项目的权限
-7. 创建后复制 token，只会完整显示一次
+1. 打开 `https://prompt.ql.app/project/p-8969d7e6-d5df/user-directory/members/baa57f2d-141e-44b0-89fb-614ae19d1a32`
+2. 页面下方找到 `Personal Access Tokens`
+3. 点击 `New token`
+4. `Token name` 填 `feed2api-zeabur`
+5. `Scope` 保持 `Unrestricted`
+6. 点击 `Create token`
+7. 复制以 `pql_ut_` 开头的 token
 
-部署时填：
-
-```bash
-PROMPTQL_TOKEN=刚复制的 token
-```
-
-如果界面入口变了，可以在 PromptQL 页面里用 `Ctrl + K` 或页面搜索找
-`token`、`bot token`、`user token`。
+token 只会完整显示一次。你当前浏览器页面已经生成了一个 token，
+页面上正在显示完整值，可以直接复制到 Zeabur。
 
 
-### 1.3 是否需要房间
+## 3. Zeabur 部署
 
-角色扮演建议使用 roomless 模式：
-
-```bash
-PROMPTQL_ROOMLESS=true
-```
-
-这样 SillyTavern 的对话不会刷到 `general/feed`。
-
-如果你想让对话进入某个房间，再改成：
-
-```bash
-PROMPTQL_ROOMLESS=false
-PROMPTQL_ROOM_NAME=general
-```
-
-
-### 1.4 聊天端点怎么处理
-
-默认配置会按 PromptQL 前端规则派生聊天 GraphQL 端点：
-
-```bash
-PROMPTQL_PLAYGROUND_HOST=https://playground.promptql.pro.hasura.io
-```
-
-大多数情况下不用改。
-
-如果部署后访问 `/ready` 提示聊天端点 SSL、404 或 schema 不存在：
-
-1. 打开 `https://prompt.ql.app`
-2. 进入项目并发送一条普通消息
-3. 打开浏览器开发者工具 `Network`
-4. 过滤 `graphql` 或 `start_thread`
-5. 找到请求体里包含 `start_thread` 的请求
-6. 复制它的 `Request URL`
-7. 在 Zeabur 里填：
-
-```bash
-PROMPTQL_CHAT_GRAPHQL_ENDPOINT=复制到的 Request URL
-```
-
-
-## 2. Zeabur 部署
-
-### 2.1 从 GitHub 部署
+### 3.1 从 GitHub 部署
 
 1. 打开 Zeabur
 2. 新建 Project
 3. 选择从 GitHub 导入
 4. 选择仓库 `0401lucky/feed2api`
-5. 部署方式选 Dockerfile 或自动识别 Node.js 都可以
+5. 部署方式选 Dockerfile
 
-仓库里已经带了 `Dockerfile`。
+仓库已经带了 `Dockerfile`，不需要额外构建命令。
 
 
-### 2.2 环境变量
+### 3.2 环境变量
 
 最小必填：
 
 ```bash
-PROMPTQL_TOKEN=你的 PromptQL token
-PROMPTQL_PROJECT_NAME=p-8969d7e6-d5df
-PROMPTQL_ROOMLESS=true
 API_KEY=给 SillyTavern 填的代理密钥
+PROMPTQL_TOKEN=你的 pql_ut_ token
+PROMPTQL_PROJECT_ID=8969d7e6-d5df-4046-9d23-7d0815eb7823
+PROMPTQL_ROOM_ID=bc6ffc31-1441-4adc-bac8-e375a5671be4
 ```
 
-建议也填：
+建议完整填写：
 
 ```bash
-PROMPTQL_TIMEZONE=Asia/Shanghai
+PROMPTQL_PROJECT_NAME=p-8969d7e6-d5df
+PROMPTQL_ROOMLESS=false
+PROMPTQL_ROOM_NAME=general
+PROMPTQL_WEBHOOK_BASE_URL=https://data.prompt.ql.app/promptql/playground-v2
+PROMPTQL_CHAT_GRAPHQL_ENDPOINT=https://data.prompt.ql.app/promptql/playground-v2-hge/v1/graphql
+PROMPTQL_AUTH_HEADER=authorization
+PROMPTQL_AUTH_SCHEME=pat
 PROMPTQL_TIMEOUT_MS=120000
 PROMPTQL_REQUEST_TIMEOUT_MS=30000
 PROMPTQL_POLL_INTERVAL_MS=1200
+PROMPTQL_MAX_EVENTS=200
 ```
 
-一般不要改：
-
-```bash
-PROMPTQL_CONTROL_GRAPHQL_ENDPOINT=https://data.pro.ql.app/v1/graphql
-PROMPTQL_PLAYGROUND_HOST=https://playground.promptql.pro.hasura.io
-```
-
-只有排错时才填：
-
-```bash
-PROMPTQL_CHAT_GRAPHQL_ENDPOINT=
-PROMPTQL_PROJECT_ID=
-PROMPTQL_ROOM_ID=
-PROMPTQL_BUILD_ID=
-PROMPTQL_BUILD_FQDN=
-```
+`PROMPTQL_ROOMLESS` 必须是 `false`。Webhook 模式不支持 roomless。
 
 
-### 2.3 端口
+### 3.3 端口和挂载卷
 
-不用改端口。
+不用改端口。服务会读取 Zeabur 自动注入的 `PORT`，本地默认 `3000`。
 
-服务会读取 Zeabur 自动注入的 `PORT`。本地默认是 `3000`。
-
-如果 Zeabur 页面强制让你填端口，就填：
-
-```text
-3000
-```
+不需要挂载卷。服务无状态，不保存聊天记录、不写数据库。
 
 
-### 2.4 挂载卷
-
-不需要挂载卷。
-
-这个服务是无状态代理，不保存聊天记录、不落数据库、不写文件。
-
-
-### 2.5 启动命令
-
-Dockerfile 部署时不用填。
-
-如果 Zeabur 走 Node.js 自动识别，启动命令填：
-
-```bash
-npm start
-```
-
-
-## 3. 部署后检查
+## 4. 部署后检查
 
 假设 Zeabur 域名是：
 
@@ -192,27 +105,30 @@ npm start
 https://feed2api.example.zeabur.app
 ```
 
-先检查进程：
+检查进程：
 
 ```bash
 curl https://feed2api.example.zeabur.app/health
 ```
 
-再检查 PromptQL 配置：
+检查 PromptQL 配置：
 
 ```bash
 curl https://feed2api.example.zeabur.app/ready \
   -H "authorization: Bearer 你设置的 API_KEY"
 ```
 
-如果 `/health` 正常但 `/ready` 不正常，通常是：
+测试聊天：
 
-- `PROMPTQL_TOKEN` 不对或权限不够
-- `PROMPTQL_PROJECT_NAME` 填错
-- 聊天 GraphQL 端点需要手动填 `PROMPTQL_CHAT_GRAPHQL_ENDPOINT`
+```bash
+curl https://feed2api.example.zeabur.app/v1/chat/completions \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer 你设置的 API_KEY" \
+  -d '{"model":"promptql-roleplay","messages":[{"role":"user","content":"你好"}]}'
+```
 
 
-## 4. SillyTavern 配置
+## 5. SillyTavern 配置
 
 在 SillyTavern 里选 OpenAI 兼容接口：
 
@@ -221,18 +137,31 @@ curl https://feed2api.example.zeabur.app/ready \
 - API Key：填 Zeabur 里的 `API_KEY`
 - Model：`promptql-roleplay`
 
-流式输出可以开。  
-但内部仍是等 PromptQL 完整回复后一次性推给 SillyTavern。
+流式输出可以开。内部仍是等 PromptQL 完整回复后一次性推给 SillyTavern。
 
 
-## 5. 本地测试
+## 6. 当前上游状态
 
-PowerShell 示例：
+真实调用已经验证到 PromptQL Webhook 和线程事件轮询都能通。
+
+但你的 PromptQL 项目当前返回：
+
+```text
+Your project has been suspended by an administrator. Please contact support.
+```
+
+这不是代理代码问题。只要 PromptQL 继续返回 suspended，SillyTavern 侧会收到 502。
+需要先在 PromptQL 侧解除项目暂停，聊天才会真正产出角色扮演回复。
+
+
+## 7. 本地测试
+
+PowerShell：
 
 ```powershell
-$env:PROMPTQL_TOKEN="你的 PromptQL token"
-$env:PROMPTQL_PROJECT_NAME="p-8969d7e6-d5df"
-$env:PROMPTQL_ROOMLESS="true"
+$env:PROMPTQL_TOKEN="你的 pql_ut_ token"
+$env:PROMPTQL_PROJECT_ID="8969d7e6-d5df-4046-9d23-7d0815eb7823"
+$env:PROMPTQL_ROOM_ID="bc6ffc31-1441-4adc-bac8-e375a5671be4"
 $env:API_KEY="test-key"
 npm start
 ```
@@ -245,43 +174,3 @@ curl http://localhost:3000/v1/chat/completions \
   -H "authorization: Bearer test-key" \
   -d "{\"model\":\"promptql-roleplay\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
 ```
-
-
-## 6. 常见问题
-
-### 6.1 返回 API Key 不正确
-
-SillyTavern 里的 API Key 要和 Zeabur 环境变量 `API_KEY` 一致。
-
-
-### 6.2 返回缺少 PROMPTQL_TOKEN
-
-Zeabur 没填 `PROMPTQL_TOKEN`，或者部署后没有重新启动服务。
-
-
-### 6.3 `/ready` 提示 access-denied
-
-Token 无效、过期，或者没有访问该项目的权限。
-
-
-### 6.4 `/ready` 提示找不到项目
-
-检查 URL 里的项目名是否填对。
-
-例如：
-
-```text
-/project/p-8969d7e6-d5df/room/general/feed
-```
-
-应该填：
-
-```bash
-PROMPTQL_PROJECT_NAME=p-8969d7e6-d5df
-```
-
-
-### 6.5 `/ready` 提示聊天端点不可用
-
-按上面的 `1.4`，从浏览器 DevTools 复制 `start_thread` 的 Request URL，
-填到 `PROMPTQL_CHAT_GRAPHQL_ENDPOINT`。

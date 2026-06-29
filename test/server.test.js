@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   deriveChatGraphqlEndpoint,
   extractAssistantText,
+  extractPromptqlAgentText,
   normalizeContent,
   normalizeMessages,
 } from "../src/server.js";
@@ -55,6 +56,54 @@ test("从事件列表里提取助手回复", () => {
   ]);
 
   assert.equal(text, "你好，我在。");
+});
+
+test("从 PromptQL final_response_sent 事件提取最终回复", () => {
+  const text = extractPromptqlAgentText({
+    AgentMessage: {
+      update: {
+        content: {
+          interaction_update: {
+            main_agent: {
+              action_completed: {
+                result: {
+                  agent_loop_action_result_type: "final_response_sent",
+                  message: "连通正常",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(text, "连通正常");
+});
+
+test("忽略 PromptQL 中间状态事件", () => {
+  const text = extractAssistantText([
+    {
+      thread_event_id: 2,
+      event_data: {
+        AgentMessage: {
+          update: {
+            content: {
+              interaction_update: {
+                wiki_selection: {
+                  wiki_pages_selected: {
+                    search_hits: [{ snippet: "中间检索内容" }],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  ]);
+
+  assert.equal(text, "");
 });
 
 test("派生 PromptQL v2 聊天 GraphQL 端点", () => {

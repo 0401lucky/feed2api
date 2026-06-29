@@ -6,64 +6,34 @@ const config = {
   port: toPositiveInt(process.env.PORT, 3000),
   apiKey: process.env.API_KEY || "",
   promptqlToken: process.env.PROMPTQL_TOKEN || "",
-  controlGraphqlEndpoint:
-    process.env.PROMPTQL_CONTROL_GRAPHQL_ENDPOINT ||
-    process.env.PROMPTQL_GRAPHQL_ENDPOINT ||
-    "https://data.pro.ql.app/v1/graphql",
+  promptqlAuthHeader: process.env.PROMPTQL_AUTH_HEADER || "authorization",
+  promptqlAuthScheme: process.env.PROMPTQL_AUTH_SCHEME ?? "pat",
+  webhookBaseUrl:
+    process.env.PROMPTQL_WEBHOOK_BASE_URL ||
+    "https://data.prompt.ql.app/promptql/playground-v2",
   chatGraphqlEndpoint:
     process.env.PROMPTQL_CHAT_GRAPHQL_ENDPOINT ||
-    deriveChatGraphqlEndpoint(
-      process.env.PROMPTQL_PLAYGROUND_HOST ||
-        "https://playground.promptql.pro.hasura.io",
-    ),
+    "https://data.prompt.ql.app/promptql/playground-v2-hge/v1/graphql",
   projectName: process.env.PROMPTQL_PROJECT_NAME || "p-8969d7e6-d5df",
-  projectId: process.env.PROMPTQL_PROJECT_ID || "",
+  projectId:
+    process.env.PROMPTQL_PROJECT_ID ||
+    "8969d7e6-d5df-4046-9d23-7d0815eb7823",
   roomName: process.env.PROMPTQL_ROOM_NAME || "general",
   roomId: process.env.PROMPTQL_ROOM_ID || "",
-  roomless: toBoolean(process.env.PROMPTQL_ROOMLESS, true),
-  buildId: process.env.PROMPTQL_BUILD_ID || "",
-  buildFqdn: process.env.PROMPTQL_BUILD_FQDN || "",
-  visibility: process.env.PROMPTQL_VISIBILITY || undefined,
-  timezone: process.env.PROMPTQL_TIMEZONE || "Asia/Shanghai",
+  roomless: toBoolean(process.env.PROMPTQL_ROOMLESS, false),
   pollIntervalMs: toPositiveInt(process.env.PROMPTQL_POLL_INTERVAL_MS, 1200),
   timeoutMs: toPositiveInt(process.env.PROMPTQL_TIMEOUT_MS, 120000),
   requestTimeoutMs: toPositiveInt(process.env.PROMPTQL_REQUEST_TIMEOUT_MS, 30000),
   maxEvents: toPositiveInt(process.env.PROMPTQL_MAX_EVENTS, 200),
-  executionMode: process.env.PROMPTQL_EXECUTION_MODE || undefined,
-  agentResponseConfig: process.env.PROMPTQL_AGENT_RESPONSE_CONFIG || undefined,
+  webhookMaxPromptChars: toPositiveInt(
+    process.env.PROMPTQL_WEBHOOK_MAX_PROMPT_CHARS,
+    6000,
+  ),
 };
 
 const state = {
   promptqlContextPromise: null,
 };
-
-const PROJECT_CONTEXT_QUERY = `
-query getProjectContext($projectName: String!) {
-  ddn_projects(where: {name: {_eq: $projectName}}, limit: 1) {
-    id
-    name
-    title
-    endpoint
-    environments(order_by: {created_at: desc}, limit: 1) {
-      id
-      name
-      fqdn
-      current_build_id
-      build {
-        id
-        fqdn
-        endpoint
-        version
-      }
-      most_recent_build: builds(limit: 1, order_by: {created_at: desc}) {
-        id
-        version
-        created_at
-      }
-    }
-  }
-}
-`;
 
 const ROOMS_QUERY = `
 query getRoomsByProjectId($projectID: uuid!) {
@@ -72,79 +42,6 @@ query getRoomsByProjectId($projectID: uuid!) {
     name
     visibility
     project_id
-  }
-}
-`;
-
-const START_THREAD_MUTATION = `
-mutation StartThread(
-  $message: String!
-  $projectId: String!
-  $timezone: String!
-  $buildId: String
-  $buildFqdn: String
-  $visibility: String
-  $roomId: String
-  $agentResponseConfig: String
-  $executionMode: String
-) {
-  start_thread(
-    message: $message
-    projectId: $projectId
-    timezone: $timezone
-    buildId: $buildId
-    buildFqdn: $buildFqdn
-    visibility: $visibility
-    roomId: $roomId
-    agentResponseConfig: $agentResponseConfig
-    executionMode: $executionMode
-  ) {
-    thread_id
-    title
-    created_at
-    updated_at
-    thread_events {
-      thread_event_id
-      created_at
-      event_data
-      user_id
-    }
-  }
-}
-`;
-
-const START_THREAD_ROOMLESS_MUTATION = `
-mutation StartThreadRoomless(
-  $message: String!
-  $projectId: String!
-  $timezone: String!
-  $buildId: String
-  $buildFqdn: String
-  $visibility: String
-  $agentResponseConfig: String
-  $executionMode: String
-) {
-  start_thread(
-    message: $message
-    projectId: $projectId
-    timezone: $timezone
-    buildId: $buildId
-    buildFqdn: $buildFqdn
-    visibility: $visibility
-    roomless: true
-    agentResponseConfig: $agentResponseConfig
-    executionMode: $executionMode
-  ) {
-    thread_id
-    title
-    created_at
-    updated_at
-    thread_events {
-      thread_event_id
-      created_at
-      event_data
-      user_id
-    }
   }
 }
 `;
@@ -160,7 +57,6 @@ query getThreadEvents($thread_id: uuid, $after_event_id: bigint!, $limit: Int = 
     thread_id
     event_data
     created_at
-    user_id
   }
 }
 `;
@@ -184,6 +80,10 @@ function toBoolean(value, fallback) {
 function deriveChatGraphqlEndpoint(playgroundHost) {
   const host = String(playgroundHost || "").replace(/\/+$/, "");
   return `${host}-v2-hge/v1/graphql`;
+}
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
 }
 
 function jsonResponse(res, statusCode, payload, headers = {}) {
@@ -259,7 +159,7 @@ async function graphqlRequest(endpoint, query, variables = {}, label = "PromptQL
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${config.promptqlToken}`,
+        ...promptqlAuthHeaders(),
       },
       body: JSON.stringify({ query, variables }),
       signal: controller.signal,
@@ -294,6 +194,62 @@ async function graphqlRequest(endpoint, query, variables = {}, label = "PromptQL
   return payload.data;
 }
 
+function promptqlAuthHeaders() {
+  const value = config.promptqlAuthScheme
+    ? `${config.promptqlAuthScheme} ${config.promptqlToken}`
+    : config.promptqlToken;
+  return {
+    [config.promptqlAuthHeader]: value,
+  };
+}
+
+async function promptqlWebhookRequest(url, body) {
+  if (!config.promptqlToken) {
+    throw new Error("缺少 PROMPTQL_TOKEN 环境变量");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...promptqlAuthHeaders(),
+        ...(body ? { "content-type": "text/plain; charset=utf-8" } : {}),
+      },
+      body,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`PromptQL Webhook 请求超时：${config.requestTimeoutMs}ms`);
+    }
+    throw new Error(`PromptQL Webhook 请求失败：${err.message || String(err)}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`PromptQL Webhook 返回了非 JSON 响应：${text.slice(0, 300)}`);
+  }
+
+  if (!response.ok) {
+    const message = payload.error || payload.detail || `HTTP ${response.status}`;
+    const err = new Error(`PromptQL Webhook 错误：${message}`);
+    err.statusCode = response.status || 502;
+    err.promptql = payload;
+    throw err;
+  }
+
+  return payload;
+}
+
 function graphQLErrorStatus(errors = []) {
   const codes = errors
     .map((item) => item?.extensions?.code)
@@ -320,34 +276,25 @@ async function getPromptqlContext() {
 }
 
 async function resolvePromptqlContext() {
-  let project = null;
-
-  if (config.projectId) {
-    project = { id: config.projectId, name: config.projectName };
-  } else {
-    const data = await graphqlRequest(
-      config.controlGraphqlEndpoint,
-      PROJECT_CONTEXT_QUERY,
-      {
-        projectName: config.projectName,
-      },
-      "PromptQL 控制台",
+  if (config.roomless) {
+    throw new Error(
+      "Webhook 模式不支持 PROMPTQL_ROOMLESS=true，请设置 PROMPTQL_ROOMLESS=false 并配置房间",
     );
-    project = data.ddn_projects?.[0];
-    if (!project?.id) {
-      throw new Error(`找不到 PromptQL 项目：${config.projectName}`);
-    }
+  }
+
+  if (!config.projectId) {
+    throw new Error("缺少 PROMPTQL_PROJECT_ID 环境变量");
   }
 
   let roomId = config.roomId || "";
-  if (!config.roomless && !roomId && config.roomName) {
+  if (!roomId && config.roomName) {
     const roomData = await graphqlRequest(
-      config.controlGraphqlEndpoint,
+      config.chatGraphqlEndpoint,
       ROOMS_QUERY,
       {
-        projectID: project.id,
+        projectID: config.projectId,
       },
-      "PromptQL 控制台",
+      "PromptQL 聊天",
     );
     const rooms = roomData.rooms || [];
     const room = rooms.find((item) => item.name === config.roomName);
@@ -360,29 +307,16 @@ async function resolvePromptqlContext() {
     roomId = room.room_id;
   }
 
-  const env = project.environments?.[0];
-  const buildId =
-    config.buildId ||
-    env?.current_build_id ||
-    env?.build?.id ||
-    env?.most_recent_build?.[0]?.id ||
-    undefined;
-  const buildFqdn =
-    config.buildFqdn ||
-    env?.build?.fqdn ||
-    env?.build?.endpoint ||
-    env?.fqdn ||
-    project.endpoint ||
-    undefined;
+  if (!roomId) {
+    throw new Error("缺少 PROMPTQL_ROOM_ID，且无法通过 PROMPTQL_ROOM_NAME 找到房间");
+  }
 
   return {
-    projectId: project.id,
-    projectName: project.name || config.projectName,
-    roomId: config.roomless ? undefined : roomId || undefined,
+    projectId: config.projectId,
+    projectName: config.projectName,
+    roomId,
     roomName: config.roomName || undefined,
-    buildId,
-    buildFqdn,
-    roomless: config.roomless,
+    roomless: false,
   };
 }
 
@@ -428,33 +362,36 @@ function normalizeContent(content) {
 
 async function createPromptqlThread(message) {
   const context = await getPromptqlContext();
-  const variables = {
-    message,
-    projectId: context.projectId,
-    timezone: config.timezone,
-    buildId: context.buildId,
-    buildFqdn: context.buildFqdn,
-    visibility: config.visibility,
-    agentResponseConfig: config.agentResponseConfig,
-    executionMode: config.executionMode,
-  };
-  const data = await graphqlRequest(
-    config.chatGraphqlEndpoint,
-    context.roomless ? START_THREAD_ROOMLESS_MUTATION : START_THREAD_MUTATION,
-    context.roomless ? variables : { ...variables, roomId: context.roomId },
-    "PromptQL 聊天",
+  const base = trimTrailingSlash(config.webhookBaseUrl);
+  const url = new URL(
+    `${base}/hooks/room/${encodeURIComponent(context.roomId)}/send_message`,
   );
 
-  const thread = data.start_thread;
-  if (!thread?.thread_id) {
+  let body;
+  if (message.length > config.webhookMaxPromptChars) {
+    url.searchParams.set("prompt", "请根据请求正文中的对话内容继续回复。");
+    body = message;
+  } else {
+    url.searchParams.set("prompt", message);
+  }
+  url.searchParams.set("ask_promptql", "true");
+
+  const data = await promptqlWebhookRequest(url, body);
+  if (!data.thread_id) {
     throw new Error("PromptQL 没有返回 thread_id");
   }
-  return thread;
+
+  return {
+    thread_id: data.thread_id,
+    thread_events: [],
+    initial_event_id: Number(data.message_id || 0),
+    hook_message_id: data.message_id,
+  };
 }
 
 async function waitForAssistantText(thread, startedAt = Date.now()) {
   let events = Array.isArray(thread.thread_events) ? thread.thread_events : [];
-  let afterEventId = maxEventId(events);
+  let afterEventId = Math.max(maxEventId(events), Number(thread.initial_event_id || 0));
   let best = extractAssistantText(events);
   if (best) return { text: best, events };
 
@@ -476,6 +413,13 @@ async function waitForAssistantText(thread, startedAt = Date.now()) {
     if (nextEvents.length > 0) {
       events = events.concat(nextEvents);
       afterEventId = maxEventId(events);
+      const promptqlError = extractPromptqlError(events);
+      if (promptqlError) {
+        const err = new Error(promptqlError);
+        err.statusCode = 502;
+        err.events = events;
+        throw err;
+      }
       best = extractAssistantText(events);
       if (best) return { text: best, events };
     }
@@ -494,26 +438,25 @@ function maxEventId(events) {
 }
 
 function extractAssistantText(events) {
-  const candidates = [];
-  for (const event of events) {
-    const eventData = event.event_data;
-    if (looksLikeUserEvent(eventData, event)) continue;
-    const text = extractTextFromValue(eventData);
-    if (text) {
-      candidates.push({
-        text,
-        score: scoreAssistantCandidate(eventData, event),
-        eventId: Number(event.thread_event_id || 0),
-      });
-    }
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const eventData = events[index].event_data;
+    if (looksLikeUserEvent(eventData, events[index])) continue;
+    const text = extractPromptqlAgentText(eventData);
+    if (text) return text;
   }
 
-  candidates.sort((a, b) => b.score - a.score || b.eventId - a.eventId);
-  return candidates[0]?.text || "";
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const eventData = events[index].event_data;
+    if (looksLikeUserEvent(eventData, events[index]) || eventData?.AgentMessage) continue;
+    const text = extractTextFromValue(eventData);
+    if (text) return text;
+  }
+
+  return "";
 }
 
 function looksLikeUserEvent(value, event) {
-  if (event?.user_id) return true;
+  if (value?.UserMessage || event?.user_id) return true;
   const json = safeLowerJson(value);
   return (
     json.includes('"user"') &&
@@ -522,18 +465,50 @@ function looksLikeUserEvent(value, event) {
   );
 }
 
-function scoreAssistantCandidate(value) {
-  const json = safeLowerJson(value);
-  let score = 0;
-  if (json.includes("assistant")) score += 8;
-  if (json.includes("agent")) score += 8;
-  if (json.includes("message")) score += 2;
-  if (json.includes("content")) score += 2;
-  if (json.includes("text")) score += 1;
-  if (json.includes("thinking")) score -= 6;
-  if (json.includes("tool")) score -= 4;
-  if (json.includes("error")) score -= 2;
-  return score;
+function extractPromptqlAgentText(value) {
+  const update = value?.AgentMessage?.update;
+  if (!update || typeof update !== "object") return "";
+
+  const responseGeneration =
+    update.ResponseGenerationUpdate?.update?.GeneratedResponse?.response?.message;
+  if (typeof responseGeneration === "string" && responseGeneration.trim()) {
+    return responseGeneration.trim();
+  }
+
+  const orchestrator =
+    update.OrchestratorUpdate?.update?.GeneratedResponse?.response?.message;
+  if (typeof orchestrator === "string" && orchestrator.trim()) {
+    return orchestrator.trim();
+  }
+
+  const mainAgent = update.content?.interaction_update?.main_agent;
+  const completedSummary = mainAgent?.completed?.summary;
+  if (typeof completedSummary === "string" && completedSummary.trim()) {
+    return completedSummary.trim();
+  }
+
+  const actionResult = mainAgent?.action_completed?.result;
+  if (
+    actionResult?.agent_loop_action_result_type === "final_response_sent" &&
+    typeof actionResult.message === "string" &&
+    actionResult.message.trim()
+  ) {
+    return actionResult.message.trim();
+  }
+
+  return "";
+}
+
+function extractPromptqlError(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const outcome =
+      events[index].event_data?.AgentMessage?.update?.content?.interaction_finished
+        ?.outcome;
+    const errored = outcome?.errored;
+    const message = errored?.user_facing_message || errored?.raw_error;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  return "";
 }
 
 function safeLowerJson(value) {
@@ -661,6 +636,7 @@ async function handleChatCompletions(req, res) {
     },
     promptql: {
       thread_id: thread.thread_id,
+      hook_message_id: thread.hook_message_id || null,
       event_count: result.events.length,
     },
   });
@@ -681,11 +657,11 @@ async function handleReady(_req, res) {
     promptql: {
       project_id: context.projectId,
       project_name: context.projectName,
-      room_id: context.roomId || null,
-      room_name: context.roomless ? null : context.roomName || null,
+      room_id: context.roomId,
+      room_name: context.roomName || null,
       roomless: context.roomless,
-      build_id: context.buildId || null,
-      has_build_fqdn: Boolean(context.buildFqdn),
+      webhook_base_url: config.webhookBaseUrl,
+      chat_graphql_endpoint: config.chatGraphqlEndpoint,
     },
   });
 }
@@ -805,6 +781,7 @@ export {
   createServer,
   deriveChatGraphqlEndpoint,
   extractAssistantText,
+  extractPromptqlAgentText,
   normalizeContent,
   normalizeMessages,
 };
